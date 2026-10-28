@@ -1,0 +1,33 @@
+{
+  "1": {
+    "class_type": "IDShotInputs",
+    "inputs": {
+      "project_id": "",
+      "shot_id": "shot_0001",
+      "job_id": ""
+    },
+    "_meta": {
+      "title": "IDShotInputs"
+    }
+  },
+  "2": {
+    "class_type": "IDScenePlan",
+    "inputs": {
+      "project_id": ""
+    },
+    "_meta": {
+      "title": "IDScenePlan"
+    }
+  },
+  "3": {
+    "class_type": "IDExportScene",
+    "inputs": {
+      "project_id": "",
+      "width": 1280,
+      "height": 720
+    },
+    "_meta": {
+      "title": "IDExportScene"
+    }
+  }
+}

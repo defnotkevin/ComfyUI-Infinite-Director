@@ -1,0 +1,4 @@
+# ComfyUI normally already supplies these. Torch comes from ComfyUI; do not replace it.
+aiohttp>=3.9
+numpy>=1.26
+Pillow>=10

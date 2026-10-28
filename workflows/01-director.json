@@ -1,0 +1,224 @@
+{
+  "last_node_id": 3,
+  "last_link_id": 0,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "IDShotInputs",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        325,
+        324
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "project_id",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "project_id"
+          }
+        },
+        {
+          "name": "shot_id",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "shot_id"
+          }
+        },
+        {
+          "name": "job_id",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "job_id"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_prompt",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "reference_prompt",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "shot_image",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "character",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "scene",
+          "type": "IMAGE",
+          "links": []
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": []
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "links": []
+        },
+        {
+          "name": "num_frames",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "duration",
+          "type": "FLOAT",
+          "links": []
+        },
+        {
+          "name": "seed",
+          "type": "INT",
+          "links": []
+        },
+        {
+          "name": "filename_prefix",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "IDShotInputs"
+      },
+      "widgets_values": [
+        "",
+        "shot_0001",
+        ""
+      ]
+    },
+    {
+      "id": 2,
+      "type": "IDScenePlan",
+      "pos": [
+        400,
+        0
+      ],
+      "size": [
+        325,
+        120
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "project_id",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "project_id"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "scene_json",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "shot_count",
+          "type": "INT",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "IDScenePlan"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 3,
+      "type": "IDExportScene",
+      "pos": [
+        800,
+        0
+      ],
+      "size": [
+        325,
+        160
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "project_id",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "project_id"
+          }
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "export_path",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "IDExportScene"
+      },
+      "widgets_values": [
+        "",
+        1280,
+        720
+      ]
+    }
+  ],
+  "links": [],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.65,
+      "offset": [
+        50,
+        50
+      ]
+    }
+  },
+  "version": 0.4
+}

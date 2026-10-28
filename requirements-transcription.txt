@@ -1,0 +1,2 @@
+# Optional. Download a compatible model separately and supply its LOCAL directory.
+faster-whisper>=1.1
