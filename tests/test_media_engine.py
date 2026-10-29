@@ -59,6 +59,7 @@ class MediaEngineTests(unittest.TestCase):
     def test_engine_resume_alternate_take_and_restart(self):
         class FakeClient:
             def __init__(self,outer):self.calls=[];self.outer=outer
+            def control(self,*args,**kwargs):return {"released":True}
             def request(self,path,data=None):return {'IDShotInputs':{},'SaveImage':{},'SaveVideo':{}}
             def execute(self,graph,output_node,role,cancel,on_queued):
                 self.calls.append(role);on_queued('fake-prompt')

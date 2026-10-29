@@ -1,8 +1,13 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+// Upgrade the old shipped default once; preserve custom model choices.
+if (!localStorage.getItem("id-reasoner-profile-v3")) {
+    if (localStorage.getItem("id-ollama-model") === "qwen3-vl:8b") localStorage.setItem("id-ollama-model", "qwen3.6:27b-q8_0");
+    localStorage.setItem("id-reasoner-profile-v3", "1");
+}
 const BASE = "/infinite-director";
-const cameraNames = { front: "Front / medium", three_quarter: "Three-quarter / close", profile: "Left profile", wide: "Wide / establishing", detail: "Hands & prop insert", cup_pov: "Inside the cup" };
+const cameraNames = { front: "Front / medium", three_quarter: "Three-quarter / close", profile: "Left profile", wide: "Wide / establishing", detail: "Hands & prop insert", cup_pov: "Inside the cup", overhead: "Overhead", right_profile: "Right profile", crane: "Crane", custom: "Custom camera" };
 const css = document.createElement("link");
 css.rel = "stylesheet"; css.href = new URL("./director.css", import.meta.url).href; document.head.append(css);
 
@@ -80,12 +85,13 @@ class Director {
     } catch (e) { this.message(e.message, true); } finally { this.polling = false; } }
     async mutate(suffix, data = {}, method = "POST") { await request(this.path(suffix), data, method); await this.load(this.project.id); }
     upload(kind, shotId) {
-        const input = el("input"); input.type = "file"; input.accept = kind === "source" ? "video/*" : "image/*";
+        const input = el("input"); input.type = "file"; input.accept = kind === "source" ? "video/*" : kind === "other" ? "image/*,video/*" : "image/*"; input.multiple = kind === "other";
         input.onchange = () => this.guard(async () => {
             if (!input.files[0]) return;
-            this.message("Uploading and preparing media…"); const form = new FormData(); form.append("file", input.files[0]);
+            for (const file of input.files) {
+            this.message(`Preparing ${file.name}…`); const form = new FormData(); form.append("file", file);
             const res = await api.fetchApi(BASE + this.path(`/assets/${kind}`) + (shotId ? `?shot_id=${encodeURIComponent(shotId)}` : ""), { method: "POST", body: form });
-            const body = await res.json(); if (!res.ok) throw new Error(body.error); await this.load(this.project.id); this.message("Asset ready");
+            const body = await res.json(); if (!res.ok) throw new Error(body.error); } await this.load(this.project.id); this.message("Assets ready");
         }); input.click();
     }
     render() {
@@ -94,21 +100,23 @@ class Director {
         const top = el("div", "id-title-row"); const title = el("div"); title.append(el("div", "id-eyebrow", "SCENE WORKSPACE"), el("h1", "", p.name));
         const stats = el("div", "id-stats", `${p.shots.length} shots  /  ${time(p.total_frames, p.fps)}  /  ${p.fps} fps`); top.append(title, stats); this.main.append(top);
         const actions = el("div", "id-actions");
-        actions.append(button("Render missing shots", () => this.guard(() => this.mutate("/render", { retries: 1 })), "id-button id-primary"),
+        actions.append(button("Generate sheets & shot references", () => this.guard(() => this.mutate("/render", { stage: "references", retries: 1 }))),
+            button("Render missing shots", () => this.guard(() => this.mutate("/render", { retries: 1 })), "id-button id-primary"),
             button("Export approved scene", () => this.guard(() => this.mutate("/export", { width: 1280, height: 720 }))),
             button("Refresh", () => this.guard(() => this.load(p.id)), "id-button id-ghost"));
         if (p.busy) actions.append(button("Cancel operation", () => this.guard(() => this.mutate("/cancel")), "id-button id-danger"));
         this.main.append(actions);
         const setup = el("details", "id-setup"); setup.open = !p.shots.length; setup.append(el("summary", "", "01  /  Performance, references & renderers"));
         const assets = el("div", "id-assets");
-        for (const [kind, label] of [["source", "Performance video"], ["character", "Character reference"], ["scene", "Scene reference"]]) {
+        for (const [kind, label] of [["source", "Performance video"], ["character", "Character reference"], ["other", "Other References"]]) {
             const card = el("div", "id-asset"); const asset = p.assets[kind];
             if (asset) { const img = el("img"); img.src = this.media(asset.poster || asset.file); img.alt = label; card.append(img); }
             else card.append(el("div", "id-asset-placeholder", kind === "source" ? "▶" : "＋"));
             card.append(el("strong", "", label), button(asset ? "Replace" : "Upload", async () => { if (kind === "source" && p.shots.length && !await ask("Replacing the performance clears the active plan and transcript. Existing media files remain on disk. Continue?")) return; this.upload(kind); }, "id-button id-ghost")); assets.append(card);
         }
         setup.append(assets);
-        const fields = el("div", "id-two-col"); const bible = field("Scene bible · identity, wardrobe, geography, props", p.bible, true); const direction = field("Direction · tone, camera language, special shots", p.direction, true); fields.append(bible.wrap, direction.wrap); setup.append(fields);
+        this.renderReferences(setup);
+        const fields = el("div", "id-two-col"); const bible = field("Scene bible · optional constraints / generated continuity guide", p.bible, true); const direction = field("Direction · tone, camera language, special shots", p.direction, true); direction.input.placeholder = "(0-4 seconds) Default camera\n(5-7 seconds) Inside the cup, match @ref_ID\n(8-11 seconds) Slowly crane toward the character\n(11-15 seconds) Directly overhead\n(16-18 seconds) Right profile"; fields.append(direction.wrap, bible.wrap); setup.append(fields, el("p", "id-help", "Write what should happen in Direction. The agent builds the scene bible: who the character is, fixed wardrobe, room layout, prop appearance and positions. Leave it blank to generate it, or enter constraints to preserve. Use the reference IDs below to identify THIS IMAGE. Gaps in timecodes hold the preceding shot."));
         setup.append(button("Save direction", () => this.guard(() => this.mutate("", { bible: bible.input.value, direction: direction.input.value, revision: p.revision }, "PATCH"))));
         const renderers = el("div", "id-renderers");
         for (const [role, file, label] of [["reference", "02-qwen-reference.json", "Qwen · reference renderer"], ["video", "03-ltx25-audio-video.json", "LTX 2.5 · video renderer"]]) {
@@ -122,16 +130,22 @@ class Director {
                 button("Capture canvas", () => this.guard(async () => { const prompt = await app.graphToPrompt(); await this.mutate(`/templates/${role}`, { graph: prompt.output, revision: p.revision }); this.message(`${label} saved. Model settings are now frozen for this project.`); })));
             renderers.append(row);
         }
+        renderers.prepend(button("Use bundled Qwen + LTX renderers", () => this.guard(() => this.mutate("/templates/bundled", {revision:p.revision}))));
         setup.append(renderers, el("p", "id-help", "Load each graph, select installed model files, then reopen this studio and capture the canvas. Shot Inputs connects the timeline to both renderers. No paid API nodes are included."));
-        const intelligence = el("div", "id-intelligence"); const model = field("Installed Ollama model (director / vision)", localStorage.getItem("id-ollama-model") || ""); model.input.placeholder = "Name from ollama list";
+        const intelligence = el("div", "id-intelligence"); const model = field("Installed Ollama model (director / vision)", localStorage.getItem("id-ollama-model") || "qwen3.6:27b-q8_0"); model.input.placeholder = "Name from ollama list";
         const runAI = action => this.guard(async () => { localStorage.setItem("id-ollama-model", model.input.value); await this.mutate("/intelligence", { action, model: model.input.value }); });
-        intelligence.append(model.wrap, button("Direct existing shots", () => runAI("direct")), button("Observe performance", () => runAI("observe")), button("Import transcript", () => this.importTranscript()), button("Transcribe locally", async () => { const path = await ask("Absolute path to an installed faster-whisper model directory", ""); if (path) this.guard(() => this.mutate("/intelligence", { action: "transcribe", model: path })); }));
+        intelligence.append(model.wrap, button("Develop scene → generate sheets & shots", () => this.guard(async () => {
+            localStorage.setItem("id-ollama-model", model.input.value);
+            await request(this.path(), { bible:bible.input.value, direction:direction.input.value, revision:p.revision }, "PATCH");
+            await this.mutate("/intelligence", {action:"develop", model:model.input.value, generate:true});
+        }), "id-button id-primary"), button("Direct existing shots", () => runAI("direct")), button("Observe performance", () => runAI("observe")), button("Import transcript", () => this.importTranscript()), button("Transcribe locally", async () => { const path = await ask("Absolute path to an installed faster-whisper model directory", ""); if (path) this.guard(() => this.mutate("/intelligence", { action: "transcribe", model: path })); }));
         setup.append(intelligence);
         const planRow = el("div", "id-actions"); const seconds = field("Target shot duration", "6"); seconds.input.type = "number"; seconds.input.min = 2; seconds.input.max = 12;
         planRow.append(seconds.wrap, button(p.shots.length ? "Rebuild shot plan" : "Plan scene →", async () => {
             if (p.shots.length && !await ask("Replace the active shot plan? The previous plan is preserved in the manifest history.")) return;
             this.guard(() => this.mutate("/plan", { target_seconds: Number(seconds.input.value), replace: !!p.shots.length, revision: p.revision }));
         }, "id-button id-primary"), el("span", "id-muted", `${p.transcript.length} transcript segments · ${p.observations?.length || 0} visual observations`)); setup.append(planRow); this.main.append(setup);
+        this.renderAudit();
         if (p.shots.length) this.renderTimeline();
         if (p.export) {
             const box = el("section", "id-export"); box.append(el("div", "id-eyebrow", "FINISHED SCENE")); const video = el("video"); video.controls = true; video.src = this.media(p.export.file); box.append(video);
@@ -140,6 +154,28 @@ class Director {
         }
         const foot = el("div", "id-actions"); const manifest = el("a", "id-muted", "Download scene manifest ↗"); manifest.href = api.apiURL(BASE + this.path("/manifest")); manifest.download = "scene-manifest.json"; foot.append(manifest); this.main.append(foot);
         if (p.busy) this.main.querySelectorAll("button").forEach(b => { if (!["Cancel operation", "Refresh"].includes(b.textContent)) b.disabled = true; });
+    }
+    renderReferences(parent) {
+        const p=this.project, grid=el("div","id-reference-grid");
+        for(const ref of p.other_references || []) {
+            const card=el("div","id-reference-card"), media=el(ref.media_type === "video" ? "video" : "img");
+            media.src=this.media(ref.file); if(ref.media_type === "video") {media.controls=true;media.preload="metadata";} else media.alt=ref.label;
+            const role=el("select"); for(const r of ["general","environment","prop","camera","wardrobe","depth","pose","motion"]) {const o=el("option","",r);o.value=r;o.selected=r===ref.role;role.append(o);}
+            const label=field("Label",ref.label), notes=field("How should this reference be used?",ref.notes,true);
+            card.append(media,el("code","",`@${ref.id}`),role,label.wrap,notes.wrap,button("Save reference",()=>this.guard(()=>this.mutate(`/references/${ref.id}`,{role:role.value,label:label.input.value,notes:notes.input.value,revision:p.revision},"PATCH"))),button("Remove reference",()=>this.guard(()=>this.mutate(`/references/${ref.id}`,{revision:p.revision},"DELETE")),"id-button id-ghost")); grid.append(card);
+        }
+        parent.append(grid,el("p","id-help","Other References accepts multiple images and videos: props, camera examples, environments, depth, pose and motion. Videos are sampled by the vision director. Depth/pose are visual guidance unless you connect a compatible control workflow."));
+        const install=el("details","id-setup"); install.append(el("summary","","Runpod automatic setup"),el("p","id-help","Run in the ComfyUI Python environment from the Infinite Director folder. Downloads resume; Hugging Face gated models require your account access and HF_TOKEN. Restart ComfyUI after installation."),el("pre","id-review-text","python scripts/setup_runpod.py --comfy-root /workspace/ComfyUI --all")); parent.append(install);
+    }
+    renderAudit() {
+        const p=this.project; if(!p.designs?.length && !p.agent_report && !p.plan_notes?.length) return;
+        const section=el("details","id-setup"); section.open=true; section.append(el("summary","","Preproduction audit · bible, sheets and director decisions"));
+        section.append(el("p","id-bible",p.bible || "Scene bible has not been generated."));
+        const grid=el("div","id-reference-grid");
+        for(const d of p.designs || []) {const card=el("div","id-reference-card");card.append(el("strong","",d.label || d.kind));if(d.stale)card.append(el("p","id-help","Settings changed · regenerate this sheet"));if(d.file){const a=el("a");a.href=this.media(d.file);a.target="_blank";a.rel="noopener";const img=el("img");img.src=a.href;img.alt=d.label || d.kind;a.append(img);card.append(a);}else card.append(el("p","id-muted","Awaiting Qwen generation"));const prompt=el("details");prompt.append(el("summary","","Qwen design prompt"),el("pre","id-review-text",d.prompt));card.append(prompt,button("Edit sheet prompt",async()=>{const value=await ask("Qwen design sheet prompt",d.prompt);if(value)this.guard(()=>this.mutate(`/designs/${d.id}`,{prompt:value,revision:p.revision},"PATCH"));}));grid.append(card);} section.append(grid);
+        for(const note of p.plan_notes || []) section.append(el("p","id-help",note));
+        if(p.agent_report){const report=el("details");report.append(el("summary","","Director evidence and assumptions"),el("pre","id-review-text",JSON.stringify(p.agent_report,null,2)));section.append(report);}
+        this.main.append(section);
     }
     importTranscript() { const input = el("input"); input.type = "file"; input.accept = ".json"; input.onchange = () => this.guard(async () => { const raw = JSON.parse(await input.files[0].text()); await this.mutate("/transcript", { segments: Array.isArray(raw) ? raw : raw.segments, revision: this.project.revision }); }); input.click(); }
     renderTimeline() {
@@ -161,6 +197,7 @@ class Director {
         if (take) { const video = el("video"); video.controls = true; video.src = this.media(take.file); video.preload = "metadata"; preview.append(video); preview.append(el("p", "id-help", "Take preview includes generation handles. Final export trims to the edit and uses the original master audio.")); }
         else if (shot.reference_override?.file || shot.reference) { const img = el("img"); img.src = this.media(shot.reference_override?.file || shot.reference); img.alt = "Selected shot reference"; preview.append(img); }
         else { const placeholder = el("div", "id-preview-empty"); placeholder.append(el("span", "", "FRAME / " + shot.id.split("_").at(-1)), el("p", "", "Your next camera angle starts here.")); preview.append(placeholder); }
+        if (take && (shot.reference_override?.file || shot.reference)) {const details=el("details","id-setup");details.append(el("summary","","Audit Qwen input alongside video"));const img=el("img");img.src=this.media(shot.reference_override?.file || shot.reference);img.alt="Qwen input for this take";details.append(img);preview.append(details);}
         const takeRow = el("div", "id-actions");
         takeRow.append(button("Render this shot", () => this.guard(() => this.mutate("/render", { shot_ids:[shot.id], retries:1, force:true })), "id-button id-primary"), button("Upload shot reference", () => this.upload("reference",shot.id), "id-button id-ghost"));
         if (shot.reference_override) takeRow.append(button("Use generated reference", () => this.guard(() => this.mutate(`/shots/${shot.id}`, {clear_reference:true,revision:p.revision},"PATCH")), "id-button id-ghost"));
@@ -168,15 +205,17 @@ class Director {
         if (shot.candidates.length) {
             const takes = el("div", "id-takes"); takes.append(el("div", "id-eyebrow", "TAKES · REVIEW BEFORE APPROVING"));
             shot.candidates.forEach((c,i) => { const row=el("div","id-take"); row.append(el("span","",`Take ${i+1}${c.id===shot.selected?" · selected":""}${c.approved?" · approved":""}`),button("Select",()=>this.guard(()=>this.mutate(`/shots/${shot.id}/select`,{candidate_id:c.id,approved:false,revision:p.revision})),"id-button id-ghost"),button("Approve",()=>this.guard(()=>this.mutate(`/shots/${shot.id}/select`,{candidate_id:c.id,approved:true,revision:p.revision})),"id-button")); takes.append(row); }); preview.append(takes);
-            preview.append(button("Review with local vision model", () => this.guard(() => this.mutate("/intelligence", {action:"review", shot_id:shot.id, model:localStorage.getItem("id-ollama-model") || ""})), "id-button id-ghost"));
+            preview.append(button("Review with local vision model", () => this.guard(() => this.mutate("/intelligence", {action:"review", shot_id:shot.id, model:localStorage.getItem("id-ollama-model") || "qwen3.6:27b-q8_0"})), "id-button id-ghost"));
             if (take?.visual_review) { const review = el("details", "id-setup"); review.append(el("summary", "", "Vision review · advisory only"), el("pre", "id-review-text", JSON.stringify(take.visual_review.assessment, null, 2))); preview.append(review); }
             preview.append(el("p","id-help","Technical checks verify duration and decodability. Identity, hands, action continuity, and lip sync require your visual review. Stale takes cannot be selected."));
         }
         const form=el("div","id-shot-form"); form.append(el("div","id-eyebrow",`${shot.id.toUpperCase()} · ${time(shot.start,p.fps)} → ${time(shot.end,p.fps)}`));
         const camWrap=el("label","id-field"); camWrap.append(el("span","","Camera")); const camera=el("select"); for(const [key,label] of Object.entries(cameraNames)){const option=el("option","",label);option.value=key;option.selected=key===shot.camera;camera.append(option);} camWrap.append(camera);form.append(camWrap);
-        const fields={};for(const [key,label] of [["purpose","Purpose"],["action","Action / performance"],["state_in","State at start"],["state_out","State at end"],["notes","Additional direction"]]){fields[key]=field(label,shot[key],key!=="purpose");form.append(fields[key].wrap);}
+        const fields={};for(const [key,label] of [["purpose","Purpose"],["action","Action / performance"],["state_in","State at start"],["state_out","State at end"],["notes","Additional direction"],["camera_description","Camera description"],["image_prompt","Qwen opening-frame prompt"],["video_prompt","LTX motion prompt"]]){fields[key]=field(label,shot[key],key!=="purpose");form.append(fields[key].wrap);}
+        const refs=field("Bound references · comma-separated IDs", (shot.reference_ids || []).join(", ")); form.append(refs.wrap);
+        const compiled=el("details","id-setup"); compiled.append(el("summary","","Audit exact renderer prompts"),el("pre","id-review-text",JSON.stringify(shot.compiled,null,2))); form.append(compiled);
         const seed=field("Seed",shot.seed);seed.input.type="number";seed.input.min="0";form.append(seed.wrap);
-        form.append(button("Save shot direction",()=>this.guard(()=>this.mutate(`/shots/${shot.id}`,{camera:camera.value,seed:Number(seed.input.value),...Object.fromEntries(Object.entries(fields).map(([k,v])=>[k,v.input.value])),revision:p.revision},"PATCH")),"id-button id-primary"));
+        form.append(button("Save shot direction",()=>this.guard(()=>this.mutate(`/shots/${shot.id}`,{camera:camera.value,reference_ids:refs.input.value.split(",").map(x=>x.trim()).filter(Boolean),seed:Number(seed.input.value),...Object.fromEntries(Object.entries(fields).map(([k,v])=>[k,v.input.value])),revision:p.revision},"PATCH")),"id-button id-primary"));
         if(shot!==p.shots.at(-1)){const end=field("Cut after this frame (exclusive)",shot.end);end.input.type="number";form.append(end.wrap,button("Move cut",()=>this.guard(()=>this.mutate("/boundary",{shot_id:shot.id,frame:Number(end.input.value),revision:p.revision})),"id-button id-ghost"));}
         const text=p.transcript.filter(s=>s.end>shot.start/p.fps&&s.start<shot.end/p.fps).map(s=>s.text).join(" ");if(text)form.append(el("blockquote","id-dialogue",text));
         editor.append(preview,form);section.append(editor);this.main.append(section);

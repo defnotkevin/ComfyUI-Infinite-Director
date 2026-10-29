@@ -11,13 +11,15 @@ persist across sessions. Editing one shot does not require rebuilding the whole 
 
 - A browser studio inside ComfyUI: projects, media uploads, storyboard, timeline,
   shot direction, cut boundaries, take selection, approval, and export.
-- Four custom nodes: **Shot Inputs**, **Scene Plan**, **LTX Frame Count**, **Export Scene**.
+- Studio bridge nodes plus standalone **Director**, chainable **Other Reference**, sheet/shot prompt nodes, take saving and timeline preview.
 - Flat, editable Qwen Image Edit 2511 and LTX 2.5 audio-to-video workflows, plus
   corresponding API graphs. The bundled graphs use local model nodes only.
 - A background scheduler that queues normal ComfyUI prompts, batches reference
   work before video work, reuses cached references/takes, and supports bounded retries.
 - Separate candidate takes with distinct seeds and recorded provenance.
-- Optional local Ollama directing, sparse visual observations, and advisory take review.
+- Local vision director: timecoded direction → generated scene bible → Qwen character/prop sheets → camera opening frames and LTX motion prompts.
+- Multiple image/video references with explicit roles and @reference bindings; preproduction audit panels.
+- Optional local Ollama sparse visual observations and advisory take review.
 - Optional local faster-whisper transcription, or timestamped transcript import.
 - Frame-exact edit assembly using FFmpeg, a single master audio track, lossless WAV
   export, and an edit manifest. Existing generated speech is not used in the final edit.
@@ -45,33 +47,80 @@ VRAM use, and inference speed remain unmeasured. See [VALIDATION.md](docs/VALIDA
    to versions supporting the LTX 2.5 workflow nodes. Download the models below.
 5. Restart ComfyUI and reload the browser. Open **Infinite Director** at the bottom left.
 
-No weights are automatically downloaded and no API keys are required by this pack.
+Alternatively, on Runpod, from this repository folder and in **ComfyUI's Python environment**:
+
+```bash
+python scripts/setup_runpod.py --comfy-root /workspace/ComfyUI --all
+```
+
+This installs dependencies and LTX nodes, installs FFmpeg when running as root on Ubuntu,
+installs/starts Ollama, pulls `qwen3.6:27b-q8_0`, and downloads the eight exact model files used by
+the bundled renderers. Use `--dry-run --all` to inspect destinations first. Downloads
+resume, upstream revisions are recorded, and file sizes / available SHA-256 hashes are
+verified. Existing matching weights are reused. Existing LTX checkout changes are preserved.
+The installed Torch packages are constrained to their existing versions.
+
+The full BF16 model set is large; the script checks remaining disk space from upstream
+metadata. Use a persistent `/workspace` volume. Obtain access to
+[LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) on Hugging Face first, then set `HF_TOKEN`
+in the pod environment or log in with `hf auth login`. Tokens do not belong in the studio.
+This installs into an existing instance; it does not provision or bill a new Runpod instance.
+GPU rental and storage still cost money. See [Runpod setup](docs/RUNPOD.md).
+
+Model downloads occur only when you explicitly run the setup script. The studio itself
+uses local inference and does not download weights.
 The scheduler connects to the same ComfyUI process over loopback HTTP using its configured
 port. Reverse-proxy HTTPS is fine; direct TLS-only ComfyUI is not currently supported.
 
+## Separate canvas workflow (0.3)
+
+See [Canvas Director guide](docs/CANVAS_DIRECTOR.md). Load these in sequence:
+
+1. `workflows/04-canvas-director.json`: images/videos + prompt → Director → bible, design prompts, shot instructions and project ID.
+2. `workflows/05-canvas-qwen-sheets.json`: paste project ID → Qwen generates every character/prop sheet → save and preview.
+3. `workflows/06-canvas-qwen-ltx-shot.json`: paste project ID, choose zero-based shot index → Qwen opening frame → LTX segment → saved take and timeline audit.
+
+The canvas Director supports optional Codex CLI (`codex`), our stdio MCP bridge (`codex_mcp`),
+and local Ollama. Codex is a hosted reasoner and sends selected text/images to its service;
+it is not part of the fully local competition configuration. The local default is
+`qwen3.6:27b-q8_0`, with thinking explicitly enabled. The hosted API integration can be
+implemented manually at the documented provider boundary without giving a coding agent tools.
+
 ## First scene
 
-1. **Create a scene** and upload a video containing both picture and audio.
-2. Add a character image and optional scene reference. Without these, the recording's
-   first frame is used as the corresponding reference.
-3. Write the scene bible (identity, clothing, room, lighting, props) and direction. Save.
-4. Import a transcript or transcribe locally; this is optional but improves edit planning.
-5. **Plan scene**. Initial cuts target six seconds and prefer nearby speech boundaries.
-6. Under **Qwen · reference renderer**, load the graph. Select your installed model files
-   in its loaders. Reopen the studio and **Capture canvas** for the reference renderer.
-7. Do the same for **LTX 2.5 · video renderer**. Set generation resolution and model variants
-   on the canvas before capturing. Capture saves a snapshot, not a live link to the canvas.
-8. Optionally supply an installed Ollama model and choose **Direct existing shots**.
-9. **Render missing shots**. Watch progress in the status bar. Existing matching takes are
-   reused; **Render this shot** deliberately creates a new take with a different seed.
-10. Watch each take and **Approve** the desired candidate. Export requires every active
-    shot to have an approved take matching current settings.
-11. **Export approved scene** creates 1280×720 video, the original PCM master, and an edit
-    manifest. The Export Scene node supports other even dimensions up to 4096.
+1. **Create a scene** and upload a performance video containing picture and audio.
+2. Optionally upload a character reference. Add multiple images or videos to **Other References**,
+   assign their roles, and describe their intended use. Each has an `@ref_…` identifier.
+3. Write **Direction** in ordinary language or explicit time ranges. Use reference IDs for
+   phrases such as “inside the cup like this image.” Leave **Scene bible** blank to generate it,
+   or enter fixed constraints: identity, wardrobe, set geography, lighting and props.
+4. Choose **Use bundled Qwen + LTX renderers** after running setup. For custom model variants,
+   load each graph, adjust its loaders/settings, and **Capture canvas** instead.
+5. Optionally import a timestamped transcript and/or observe the performance.
+6. Select your Ollama vision model (default `qwen3.6:27b-q8_0`) and choose
+   **Develop scene → generate sheets & shots**. This saves Direction, inspects the references,
+   builds the bible and design prompts, writes the shot plan, then queues Qwen sheets and
+   opening frames. Explicit cut boundaries are preserved. Unspecified intervals become
+   auditable holds; long intervals are subdivided into bounded renders.
+7. Inspect **Preproduction audit**: bible, assumptions, character/prop sheets and prompts.
+   Inspect each shot's opening frame, reference bindings, Qwen prompt and LTX prompt. Edit
+   sheet prompts or shot prompts as needed; **Generate sheets & shot references** resumes
+   preproduction without generating video. Changing upstream settings invalidates dependent takes.
+8. **Render missing shots** generates LTX takes using original audio slices. **Render this shot**
+   makes an alternate take with a different seed.
+9. Watch and **Approve** each desired take. **Export approved scene** creates 1280×720 video,
+   original PCM master audio, and an edit manifest. Every shot must have a current approved take.
 
-The canvas graphs can also run manually: fill in `project_id` and `shot_id` on Shot Inputs
-and leave `job_id` blank. Automated rendering supplies immutable context IDs itself.
-Manual canvas output is not automatically attached as a scene take.
+The scene bible is a shared continuity record, not a technical prompt you must write yourself.
+Example: “Same woman in a red cardigan throughout. White ceramic cup in her right hand.
+Window on her left; counter behind her. Warm afternoon light. Cup stays half full.”
+The agent turns that record into model-specific prompts. Generated hidden angles are invented,
+not recovered from the source camera.
+
+Other References videos are inspected through sparse frames and represented in Qwen's labeled
+reference board. **Depth and pose are not hard LTX controls in the bundled workflow.** A custom
+compatible control workflow is needed for that. Continuous motion reconstruction and reliable
+lip sync are not guaranteed. Original dialogue timing is preserved by final audio assembly.
 
 ## Models and locations
 
@@ -93,7 +142,7 @@ Sources: [Qwen-Image](https://github.com/QwenLM/Qwen-Image),
 [LTX-2.5 weights](https://huggingface.co/Lightricks/LTX-2.5),
 [LTX workflow guide](https://github.com/Lightricks/ComfyUI-LTXVideo/tree/master/example_workflows/2.5).
 
-The base Qwen graph uses multi-image editing with character and scene references.
+The base Qwen graph uses multi-image editing with a canonical character sheet and a labeled board of selected references and prop sheets.
 A compatible camera-angle LoRA may be inserted into the graph, with its required prompt
 syntax. It is not required or silently downloaded. LTX runs at 960×544 then upscales 2×
 by default. Reduce the latent dimensions for lower memory; both should remain divisible by 32.

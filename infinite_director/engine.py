@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .core import digest, identifier, invalidate, now, reference_key, render_key, shot_spec
 from .media import validate_clip
+from .direction import bound_references, current_designs, design_key
 from .intelligence import local_url
 
 
@@ -124,12 +125,39 @@ class ComfyClient:
         self.request("/queue", {"delete": [prompt_id]})
         raise TimeoutError("ComfyUI render exceeded one hour; running GPU prompt was not globally interrupted")
 
+    def control(self, store, pid, payload, cancel, on_queued=lambda _: None, timeout=1800):
+        token = uuid.uuid4().hex[:16]
+        context = store.asset(pid, f"contexts/{token}.gpu.json")
+        context.parent.mkdir(exist_ok=True)
+        context.write_text(json.dumps(payload))
+        if cancel.is_set(): raise Cancelled("Cancelled before GPU handoff")
+        graph = {"1": {"class_type": "IDGPUStage", "inputs": {"project_id": pid, "context_id": token}}}
+        reply = self.request("/prompt", {"prompt": graph, "client_id": "infinite-director"})
+        if reply.get("error") or reply.get("node_errors") or not reply.get("prompt_id"):
+            raise RuntimeError(f"GPU handoff rejected; restart ComfyUI to register IDGPUStage: {reply}")
+        prompt_id = reply["prompt_id"]; on_queued(prompt_id)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if cancel.is_set():
+                self.request("/queue", {"delete": [prompt_id]})
+                raise Cancelled("Cancelled. Running GPU cleanup/reasoning finishes safely on the ComfyUI worker.")
+            history = self.request("/history/" + prompt_id).get(prompt_id)
+            if history:
+                if history.get("status", {}).get("status_str") == "error":
+                    raise RuntimeError(str(history.get("status", {}).get("messages", []))[-3000:])
+                return json.loads(store.asset(pid, f"contexts/{token}.result.json").read_text())
+            cancel.wait(.25)
+        self.request("/queue", {"delete": [prompt_id]})
+        raise TimeoutError("GPU handoff timed out; any running prompt is left to finish safely")
+
 
 class Engine:
     def __init__(self, store, client):
         self.store, self.client = store, client
         self.lock = threading.RLock()
         self.active = {}
+        self.gpu_lock = threading.Lock()
+        self.stage = None
         # Jobs cannot resume automatically after restart: prompt completion is ambiguous.
         for summary in store.list():
             def recover(p):
@@ -162,9 +190,25 @@ class Engine:
                 raise
             def worker():
                 try:
-                    self.progress(pid, jid, status="running")
-                    task(cancel, jid)
-                    self.progress(pid, jid, status="cancelled" if cancel.is_set() else "complete")
+                    while not self.gpu_lock.acquire(timeout=.25):
+                        if cancel.is_set(): raise Cancelled("Cancelled while waiting for another director project")
+                    try:
+                        if cancel.is_set(): raise Cancelled("Cancelled before starting")
+                        self.stage = None
+                        self.progress(pid, jid, status="running")
+                        from .intelligence import reasoning_backend
+                        with reasoning_backend(lambda model, system, prompt, images=None:
+                                self.reason(pid, jid, cancel, model, system, prompt, images)):
+                            try:
+                                task(cancel, jid)
+                            finally:
+                                if self.stage is not None:
+                                    # Queue cleanup even after cancellation; never interrupt a running prompt.
+                                    self.client.control(self.store, pid, {"action": "release"}, threading.Event())
+                                    self.stage = None
+                        self.progress(pid, jid, status="cancelled" if cancel.is_set() else "complete")
+                    finally:
+                        self.gpu_lock.release()
                 except Cancelled as exc:
                     self.progress(pid, jid, status="cancelled", error=str(exc))
                 except Exception as exc:
@@ -186,7 +230,25 @@ class Engine:
             if pid in self.active:
                 self.active[pid].set()
 
-    def render(self, pid, shot_ids=None, retries=1, force=False):
+    def reason(self, pid, jid, cancel, model, system, prompt, images=None):
+        self.progress(pid, jid, phase="reasoning · GPU handoff")
+        relative = [str(path.resolve().relative_to(self.store.folder(pid).resolve())) for path in (images or [])]
+        self.stage = "reason"
+        return self.client.control(self.store, pid,
+            {"action":"reason", "model":model, "system":system, "prompt":prompt, "images":relative}, cancel,
+            lambda prompt_id: self.progress(pid, jid, prompt_id=prompt_id))
+
+    def enter_stage(self, pid, jid, role, cancel):
+        if self.stage == role:
+            return
+        self.progress(pid, jid, phase=f"GPU cleanup → {role}")
+        self.client.control(self.store, pid, {"action":"release"}, cancel,
+            lambda prompt_id: self.progress(pid, jid, prompt_id=prompt_id))
+        self.stage = role
+
+    def render(self, pid, shot_ids=None, retries=1, force=False, stage="video"):
+        if stage not in ("video", "references"):
+            raise ValueError("Invalid render stage")
         if not isinstance(retries, int) or not 0 <= retries <= 3:
             raise ValueError("Retries must be 0–3")
         project = self.store.read(pid)
@@ -197,37 +259,24 @@ class Engine:
         selected = [s for s in project["shots"] if shot_ids is None or s["id"] in shot_ids]
         if not selected or (shot_ids is not None and set(shot_ids) != {s["id"] for s in selected}):
             raise ValueError("Unknown or empty shot selection")
-        if not project["templates"].get("video"):
+        if stage == "video" and not project["templates"].get("video"):
             raise ValueError("Capture the LTX canvas as the video renderer first")
         info = self.client.request("/object_info")
         for template in project["templates"].values():
             validate_template(template["graph"], template["role"], template["output_node"], info)
-        if not project["templates"].get("reference") and any(not s.get("reference_override") for s in selected):
+        if not project["templates"].get("reference") and (project.get("designs") or any(not s.get("reference_override") for s in selected)):
             raise ValueError("Capture a reference renderer or upload an individual shot reference for every selected shot")
         def work(cancel, jid):
             # Freeze project data for all queued jobs. Editing is blocked while active.
             snapshot = self.store.read(pid)
             todo = [s for s in snapshot["shots"] if s["id"] in {x["id"] for x in selected}]
-            todo = [s for s in todo if force or not any(c["key"] == render_key(snapshot, s) for c in s.get("candidates", []))]
-            refs = {}
-            for shot in todo:
-                if cancel.is_set():
-                    raise Cancelled("Cancelled between shots")
-                if shot.get("reference_override"):
-                    refs[shot["id"]] = shot["reference_override"]["file"]
-                    continue
-                key = reference_key(snapshot, shot)
-                relative = f"references/{key}.png"
-                target = self.store.asset(pid, relative)
-                if not target.exists():
-                    self.progress(pid, jid, phase="reference", shot=shot["id"])
-                    path, _ = self.execute_shot(snapshot, shot, "reference", None, jid, cancel, retries)
-                    from PIL import Image
-                    target.parent.mkdir(exist_ok=True)
-                    with Image.open(path) as image:
-                        image.convert("RGB").save(target)
-                refs[shot["id"]] = relative
-                self.store.update(pid, lambda p, sid=shot["id"], rel=relative: next(s for s in p["shots"] if s["id"] == sid).update(reference=rel))
+            self.generate_designs(snapshot, cancel, jid, retries)
+            self.store.update(pid, invalidate)
+            todo = [s for s in todo if stage == "references" or force or not any(c["key"] == render_key(snapshot, s) for c in s.get("candidates", []))]
+            refs = self.generate_references(snapshot, todo, cancel, jid, retries)
+            if stage == "references":
+                self.progress(pid, jid, phase="audit", message="Sheets and camera references are ready to inspect")
+                return
             for shot in todo:
                 if cancel.is_set():
                     raise Cancelled("Cancelled between shots")
@@ -252,14 +301,56 @@ class Engine:
             self.progress(pid, jid, phase="review", message="Rendered takes need visual approval before export")
         return self.start(pid, "render", work, expected_revision=project["revision"])
 
-    def execute_shot(self, project, shot, role, reference, jid, cancel, retries, seed_offset=0):
+    def generate_designs(self, snapshot, cancel, jid, retries=1):
+        pid = snapshot["id"]
+        for design in snapshot.get("designs", []):
+            if cancel.is_set(): raise Cancelled("Cancelled between sheets")
+            key = design_key(snapshot, design)
+            relative = f"designs/{key}.png"
+            target = self.store.asset(pid, relative)
+            if not target.exists():
+                self.progress(pid, jid, phase="Qwen design sheet", sheet=design["label"])
+                shot = dict(snapshot["shots"][0], id=design["id"], seed=design["seed"])
+                path, provenance = self.execute_shot(snapshot, shot, "reference", None, jid, cancel, retries, design=design)
+                from PIL import Image
+                target.parent.mkdir(exist_ok=True)
+                with Image.open(path) as image: image.convert("RGB").save(target)
+                design["provenance"] = provenance
+            design.update(file=relative, key=key)
+            self.store.update(pid, lambda p, value=copy.deepcopy(design): next(d for d in p["designs"] if d["id"] == value["id"]).update(value))
+
+    def generate_references(self, snapshot, shots, cancel, jid, retries=1):
+        pid, refs = snapshot["id"], {}
+        for shot in shots:
+            if cancel.is_set(): raise Cancelled("Cancelled between references")
+            if shot.get("reference_override"):
+                refs[shot["id"]] = shot["reference_override"]["file"]
+                continue
+            relative = f"references/{reference_key(snapshot, shot)}.png"
+            target = self.store.asset(pid, relative)
+            if not target.exists():
+                self.progress(pid, jid, phase="Qwen camera reference", shot=shot["id"])
+                path, _ = self.execute_shot(snapshot, shot, "reference", None, jid, cancel, retries)
+                from PIL import Image
+                target.parent.mkdir(exist_ok=True)
+                with Image.open(path) as image: image.convert("RGB").save(target)
+            refs[shot["id"]] = relative
+            self.store.update(pid, lambda p, sid=shot["id"], rel=relative: next(s for s in p["shots"] if s["id"] == sid).update(reference=rel))
+        return refs
+
+    def execute_shot(self, project, shot, role, reference, jid, cancel, retries, seed_offset=0, design=None):
+        self.enter_stage(project["id"], jid, role, cancel)
         template = project["templates"][role]
         for attempt in range(retries + 1):
             if cancel.is_set():
                 raise Cancelled("Cancelled")
             token = uuid.uuid4().hex[:16]
             context = {"project_id": project["id"], "shot_id": shot["id"], "role": role,
-                       "spec": shot_spec(project, shot), "assets": project["assets"], "reference": reference}
+                       "spec": shot_spec(project, shot), "assets": project["assets"], "reference": reference,
+                       "references": bound_references(project, design or shot),
+                       "designs": [] if design else current_designs(project)}
+            if design:
+                context["spec"]["reference_prompt"] = design["prompt"] + "\nContinuity: " + project.get("bible", "")
             context["spec"]["seed"] = (context["spec"]["seed"] + seed_offset + attempt) % (2**63)
             path = self.store.asset(project["id"], f"contexts/{token}.json")
             path.parent.mkdir(exist_ok=True)

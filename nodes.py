@@ -3,6 +3,7 @@ import json
 import math
 from .infinite_director.core import identifier, plan, shot_spec, validate_project
 from .infinite_director.runtime import runtime
+from .infinite_director.direction import bound_references, current_designs
 
 
 class IDShotInputs:
@@ -13,7 +14,7 @@ class IDShotInputs:
                              "shot_id": ("STRING", {"default": "shot_0001"}),
                              "job_id": ("STRING", {"default": "", "tooltip": "Filled by the render scheduler. Leave blank for manual preview."})}}
     RETURN_TYPES = ("STRING", "STRING", "IMAGE", "IMAGE", "IMAGE", "AUDIO", "FLOAT", "INT", "FLOAT", "INT", "STRING")
-    RETURN_NAMES = ("video_prompt", "reference_prompt", "shot_image", "character", "scene", "audio", "fps", "num_frames", "duration", "seed", "filename_prefix")
+    RETURN_NAMES = ("video_prompt", "reference_prompt", "shot_image", "character", "other_references", "audio", "fps", "num_frames", "duration", "seed", "filename_prefix")
     FUNCTION = "load"
     CATEGORY = "Infinite Director"
     DESCRIPTION = "Immutable shot inputs for Qwen reference generation and LTX audio-to-video. Audio includes trim handles and legal-frame padding."
@@ -42,7 +43,9 @@ class IDShotInputs:
             if not shot:
                 raise ValueError("Shot not found. Open Infinite Director and plan a scene first.")
             context = {"spec": shot_spec(project, shot), "assets": project["assets"],
-                       "reference": shot.get("reference_override", {}).get("file") or shot.get("reference")}
+                       "reference": shot.get("reference_override", {}).get("file") or shot.get("reference"),
+                       "references": bound_references(project, shot),
+                       "designs": current_designs(project)}
         assets, spec = context["assets"], context["spec"]
         if "source" not in assets:
             raise ValueError("Upload a performance first")
@@ -50,9 +53,14 @@ class IDShotInputs:
             with Image.open(store.asset(project_id, relative)) as im:
                 array = np.asarray(ImageOps.exif_transpose(im).convert("RGB"), dtype=np.float32).copy() / 255.0
             return torch.from_numpy(array)[None, ...]
-        character_file = assets.get("character", {}).get("file") or assets["source"]["poster"]
+        from .infinite_director.references import make_board
+        designs = context.get("designs", [])
+        character_file = next((d["file"] for d in designs if d["kind"] == "character"), None) or assets.get("character", {}).get("file") or assets["source"]["poster"]
         scene_file = assets.get("scene", {}).get("file") or assets["source"]["poster"]
         character, scene = image(character_file), image(scene_file)
+        board = make_board(store, project_id, context.get("references", []), designs)
+        if board is not None:
+            scene = torch.from_numpy(np.asarray(board, dtype=np.float32).copy() / 255.0)[None, ...]
         shot_image = image(context["reference"]) if context.get("reference") else character
         waveform, sr = audio_slice(store.asset(project_id, assets["source"]["audio"]), spec["render_start"], spec["num_frames"], spec["fps"])
         audio = {"waveform": torch.from_numpy(waveform)[None, ...], "sample_rate": sr}
@@ -121,6 +129,29 @@ class IDExportScene:
         return {"ui": {"text": [path]}, "result": (path,)}
 
 
-NODE_CLASS_MAPPINGS = {c.__name__: c for c in (IDShotInputs, IDScenePlan, IDFrameCount, IDExportScene)}
+class IDGPUStage:
+    """Internal queue barrier. Serializes memory cleanup and reasoning with GPU prompts."""
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {"project_id": ("STRING", {"default": ""}),
+                             "context_id": ("STRING", {"default": ""})}}
+    RETURN_TYPES = ()
+    FUNCTION = "execute"
+    CATEGORY = "Infinite Director/internal"
+    OUTPUT_NODE = True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
+
+    def execute(self, project_id, context_id):
+        from .infinite_director.gpu import execute_control
+        identifier(project_id); identifier(context_id)
+        store, _ = runtime()
+        execute_control(store, project_id, context_id)
+        return {"ui": {"text": ["GPU stage completed"]}}
+
+
+NODE_CLASS_MAPPINGS = {c.__name__: c for c in (IDShotInputs, IDScenePlan, IDFrameCount, IDExportScene, IDGPUStage)}
 NODE_DISPLAY_NAME_MAPPINGS = {"IDShotInputs": "Infinite Director · Shot Inputs", "IDScenePlan": "Infinite Director · Scene Plan",
-                            "IDFrameCount": "Infinite Director · LTX Frame Count", "IDExportScene": "Infinite Director · Export Scene"}
+                            "IDGPUStage": "Infinite Director · GPU Stage Handoff", "IDFrameCount": "Infinite Director · LTX Frame Count", "IDExportScene": "Infinite Director · Export Scene"}

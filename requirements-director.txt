@@ -1,0 +1,2 @@
+# Optional: our stdio MCP adapter. Direct Codex CLI mode needs no extra Python package.
+mcp>=1.12,<2

@@ -34,7 +34,7 @@ class Graph:
         return nid
     def bridge(self):
         return self.add('IDShotInputs',[('project_id','','STRING'),('shot_id','shot_0001','STRING'),('job_id','','STRING')],
-            [('video_prompt','STRING'),('reference_prompt','STRING'),('shot_image','IMAGE'),('character','IMAGE'),('scene','IMAGE'),
+            [('video_prompt','STRING'),('reference_prompt','STRING'),('shot_image','IMAGE'),('character','IMAGE'),('other_references','IMAGE'),
              ('audio','AUDIO'),('fps','FLOAT'),('num_frames','INT'),('duration','FLOAT'),('seed','INT'),('filename_prefix','STRING')],x=0,y=0)
     def save(self,name):
         workflow={'last_node_id':len(self.nodes),'last_link_id':len(self.links),'nodes':self.nodes,'links':self.links,
@@ -47,7 +47,7 @@ u=q.add('UNETLoader',[('unet_name','qwen_image_edit_2511_bf16.safetensors','COMB
 c=q.add('CLIPLoader',[('clip_name','qwen_2.5_vl_7b_fp8_scaled.safetensors','COMBO'),('type','qwen_image','COMBO'),('device','default','COMBO')],[('CLIP','CLIP')],x=390,y=200)
 v=q.add('VAELoader',[('vae_name','qwen_image_vae.safetensors','COMBO')],[('VAE','VAE')],x=390,y=420)
 pos=q.add('TextEncodeQwenImageEditPlus',[('clip',(c,0),'CLIP'),('prompt',(b,1),'STRING'),('vae',(v,0),'VAE'),('image1',(b,3),'IMAGE'),('image2',(b,4),'IMAGE')],[('CONDITIONING','CONDITIONING')],x=780,y=0)
-neg=q.add('TextEncodeQwenImageEditPlus',[('clip',(c,0),'CLIP'),('prompt','collage, contact sheet, text, watermark, duplicated people','STRING'),('vae',(v,0),'VAE'),('image1',(b,3),'IMAGE'),('image2',(b,4),'IMAGE')],[('CONDITIONING','CONDITIONING')],x=780,y=240)
+neg=q.add('TextEncodeQwenImageEditPlus',[('clip',(c,0),'CLIP'),('prompt','watermark, illegible text, distorted anatomy, inconsistent identity','STRING'),('vae',(v,0),'VAE'),('image1',(b,3),'IMAGE'),('image2',(b,4),'IMAGE')],[('CONDITIONING','CONDITIONING')],x=780,y=240)
 latent=q.add('EmptySD3LatentImage',[('width',1024,'INT'),('height',576,'INT'),('batch_size',1,'INT')],[('LATENT','LATENT')],x=780,y=490)
 model=q.add('ModelSamplingAuraFlow',[('model',(u,0),'MODEL'),('shift',3.1,'FLOAT')],[('MODEL','MODEL')],x=1160,y=0)
 s=q.add('KSampler',[('model',(model,0),'MODEL'),('seed',(b,9),'INT'),('steps',24,'INT'),('cfg',4.,'FLOAT'),('sampler_name','euler','COMBO'),('scheduler','simple','COMBO'),('positive',(pos,0),'CONDITIONING'),('negative',(neg,0),'CONDITIONING'),('latent_image',(latent,0),'LATENT'),('denoise',1.,'FLOAT')],[('LATENT','LATENT')], widgets=[0,'fixed',24,4.,'euler','simple',1.],x=1160,y=200)
@@ -91,3 +91,51 @@ l.save('03-ltx25-audio-video')
 g=Graph();g.bridge();g.add('IDScenePlan',[('project_id','','STRING')],[('scene_json','STRING'),('shot_count','INT')],x=400,y=0)
 g.add('IDExportScene',[('project_id','','STRING'),('width',1280,'INT'),('height',720,'INT')],[('export_path','STRING')],x=800,y=0)
 g.save('01-director')
+
+# Standalone, node-first workflows. Canvas templates are not scheduler API templates.
+def clone_renderer(target, source, bridge_outputs, dx=0, dy=0):
+    mapping={}
+    for node in source.nodes:
+        cls=node['type'];old=str(node['id'])
+        if cls in ('IDShotInputs','SaveImage','SaveVideo'):continue
+        inputs=[]
+        for ui in node['inputs']:
+            name=ui['name'];value=source.api[old]['inputs'][name]
+            if isinstance(value,list) and len(value)==2 and str(value[0]) in source.api:
+                value=bridge_outputs[value[1]] if str(value[0])=='1' else (mapping[str(value[0])],value[1])
+            inputs.append((name,value,ui['type']))
+        mapping[old]=target.add(cls,inputs,[(o['name'],o['type']) for o in node['outputs']],widgets=node['widgets_values'],title=node.get('title'),x=node['pos'][0]+dx,y=node['pos'][1]+dy)
+    return mapping
+
+c=Graph()
+character=c.add('LoadImage',[('image','character.png','COMBO')],[('IMAGE','IMAGE'),('MASK','MASK')],widgets=['character.png','image'],title='Identity reference',x=0,y=0)
+performance=c.add('LoadVideo',[('file','performance.mp4','COMBO')],[('VIDEO','VIDEO')],title='Original talking performance',x=0,y=300)
+prop=c.add('LoadImage',[('image','cup.png','COMBO')],[('IMAGE','IMAGE'),('MASK','MASK')],widgets=['cup.png','image'],title='Prop or camera reference',x=0,y=600)
+ref=c.add('IDReference',[('label','Cup / camera reference','STRING'),('role','prop','COMBO'),('notes','Use this design for the coffee cup.','STRING'),('image',(prop,0),'IMAGE')],[('references','ID_REFERENCES'),('reference_id','STRING')],x=400,y=600)
+refvideo=c.add('LoadVideo',[('file','depth.mp4','COMBO')],[('VIDEO','VIDEO')],title='Optional depth/motion reference (disconnect if unused)',x=0,y=950)
+refs=c.add('IDReference',[('label','Depth reference','STRING'),('role','depth','COMBO'),('notes','Structural guidance only.','STRING'),('video',(refvideo,0),'VIDEO'),('previous',(ref,0),'ID_REFERENCES')],[('references','ID_REFERENCES'),('reference_id','STRING')],x=400,y=950)
+director=c.add('IDDirector',[('name','Canvas café scene','STRING'),('direction','(0-4 seconds) Default camera.\n(5-7 seconds) Inside the cup, match @ref_001.\n(8-11 seconds) Crane slowly toward the character.\n(11-15 seconds) Overhead.\n(16-18 seconds) Right profile.','STRING'),('constraints','Keep identity, wardrobe and cup design consistent.','STRING'),('provider','codex','COMBO'),('model','','STRING'),('fps',24,'INT'),('duration',18.,'FLOAT'),('revision',0,'INT'),('character',(character,0),'IMAGE'),('performance',(performance,0),'VIDEO'),('references',(refs,0),'ID_REFERENCES')],[('plan','ID_PLAN'),('project_id','STRING'),('scene_bible','STRING'),('qwen_design_prompts','STRING'),('shot_segments','STRING'),('plan_json','STRING')],x=850,y=180)
+c.add('IDTimeline',[('project_id',(director,1),'STRING')],[('timeline_json','STRING')],x=1300,y=180)
+c.save('04-canvas-director')
+
+c=Graph();plan_node=c.add('IDLoadPlan',[('project_id','','STRING')],[('plan','ID_PLAN')],x=0,y=0)
+design=c.add('IDDesignInputs',[('plan',(plan_node,0),'ID_PLAN')],[('qwen_prompt','STRING'),('character','IMAGE'),('other_references','IMAGE'),('seed','INT'),('filename_prefix','STRING'),('design_task','ID_DESIGN_TASK')],x=0,y=240)
+mapping=clone_renderer(c,q,{1:(design,0),3:(design,1),4:(design,2),9:(design,3),10:(design,4)},dx=400)
+decoded=next(mapping[str(n['id'])] for n in q.nodes if n['type']=='VAEDecode')
+c.add('PreviewImage',[('images',(decoded,0),'IMAGE')],[],x=2400,y=100)
+saved=c.add('IDStoreDesign',[('design_task',(design,5),'ID_DESIGN_TASK'),('images',(decoded,0),'IMAGE')],[('project_id','STRING')],x=2400,y=400)
+c.save('05-canvas-qwen-sheets')
+
+c=Graph();plan_node=c.add('IDLoadPlan',[('project_id','','STRING')],[('plan','ID_PLAN')],x=0,y=0)
+shot=c.add('IDShotReferenceInputs',[('plan',(plan_node,0),'ID_PLAN'),('shot_index',0,'INT')],[('qwen_prompt','STRING'),('character','IMAGE'),('other_references','IMAGE'),('seed','INT'),('filename_prefix','STRING'),('shot_task','ID_SHOT_TASK')],x=0,y=240)
+mapping=clone_renderer(c,q,{1:(shot,0),3:(shot,1),4:(shot,2),9:(shot,3),10:(shot,4)},dx=400)
+decoded=next(mapping[str(n['id'])] for n in q.nodes if n['type']=='VAEDecode')
+c.add('PreviewImage',[('images',(decoded,0),'IMAGE')],[],x=2400,y=0)
+saved=c.add('IDStoreShotReference',[('shot_task',(shot,5),'ID_SHOT_TASK'),('images',(decoded,0),'IMAGE')],[('plan','ID_PLAN'),('shot_id','STRING'),('shot_image','IMAGE')],x=2400,y=300)
+segment=c.add('IDVideoInputs',[('plan',(saved,0),'ID_PLAN'),('shot_id',(saved,1),'STRING'),('shot_image',(saved,2),'IMAGE')],[('video_prompt','STRING'),('shot_image','IMAGE'),('audio','AUDIO'),('fps','FLOAT'),('num_frames','INT'),('duration','FLOAT'),('seed','INT'),('filename_prefix','STRING'),('take_task','ID_TAKE_TASK')],x=2800,y=300)
+mapping=clone_renderer(c,l,{0:(segment,0),2:(segment,1),5:(segment,2),6:(segment,3),7:(segment,4),8:(segment,5),9:(segment,6),10:(segment,7)},dx=3000)
+video=next(mapping[str(n['id'])] for n in l.nodes if n['type']=='CreateVideo')
+c.add('SaveVideo',[('video',(video,0),'VIDEO'),('filename_prefix',(segment,7),'STRING'),('format','auto','COMBO'),('codec','auto','COMBO')],[],x=9300,y=0)
+take=c.add('IDStoreTake',[('take_task',(segment,8),'ID_TAKE_TASK'),('video',(video,0),'VIDEO')],[('project_id','STRING')],x=9300,y=300)
+c.add('IDTimeline',[('project_id',(take,0),'STRING')],[('timeline_json','STRING')],x=9700,y=300)
+c.save('06-canvas-qwen-ltx-shot')

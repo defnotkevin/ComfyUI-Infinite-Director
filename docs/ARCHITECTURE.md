@@ -34,7 +34,7 @@ for a nested prompt behind itself in the GPU queue. Generated artifacts are copi
 from ComfyUI output/temp into the project. Image validity and usable video duration
 are checked before a candidate is recorded. No GPU model is loaded by the scheduler.
 
-Reference generation uses Qwen Image Edit Plus with separate character/scene inputs.
+Reference generation uses Qwen Image Edit Plus with a canonical character input and a labeled board of selected references/prop designs.
 Video generation uses LTX A2V with a first-frame reference and frozen supplied audio
 latents. The final video output reuses the supplied audio. The later scene export
 ignores those per-clip audio streams and muxes the master timeline once.
@@ -70,4 +70,25 @@ measured lip-sync evaluation. Human approval remains mandatory for export.
 - Export cancellation: FFmpeg may finish its current operation; cancelled exports are
   not installed as the active export.
 - Slow operations run off the aiohttp request loop.
-- No weight downloads, publishing, telemetry, or credential storage are included.
+- No publishing, telemetry, or credential storage is included. The explicit Runpod installer downloads verified weights; the studio itself never downloads models.
+
+
+## Preproduction agent (0.2)
+
+`direction.py` owns time boundaries, reference bindings and legacy scene migration. Explicit
+ranges cannot be changed by the LLM. Missing intervals become hold shots; long spans are split
+into bounded renders. `develop_scene` performs local vision inspection, continuity/design
+planning, then bounded batches of shot prompts. It validates every shot ID, camera enum,
+reference ID and prompt before committing the plan. A failed model response does not commit
+a partial plan. Subsequent Qwen generation can be resumed from sheet/reference caches.
+
+Design keys include the bible, source identity, selected references, renderer and seed.
+Shot reference keys include current design keys. Changing a canonical sheet therefore
+invalidates its dependent references and takes. Generated design images become the identity
+input and prop board for later Qwen camera-frame renders. LTX consumes those camera frames
+and the matching original audio slice. Video references are sampled for planning; the
+bundled graph does not implement a depth/pose video-control adapter.
+
+The installer keeps CUDA package versions constrained, preflights gated model access and
+free disk, pins each resolved download revision, and verifies size/SHA-256 where available.
+It preserves existing mismatching files and existing LTX checkouts rather than replacing them.

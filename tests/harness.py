@@ -14,6 +14,8 @@ ROOT=Path(__file__).resolve().parents[1]
 
 class FixtureClient:
     def __init__(self,store):self.store=store
+    def control(self,store,pid,payload,cancel,on_queued=lambda _:None):
+        return {"released":True}
     def request(self,path,data=None):
         info={}
         for file in (ROOT/'workflows').glob('*.api.json'):

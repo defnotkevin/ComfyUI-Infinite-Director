@@ -1,0 +1,112 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "character.png"
+    },
+    "_meta": {
+      "title": "Identity reference"
+    }
+  },
+  "2": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "performance.mp4"
+    },
+    "_meta": {
+      "title": "Original talking performance"
+    }
+  },
+  "3": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "cup.png"
+    },
+    "_meta": {
+      "title": "Prop or camera reference"
+    }
+  },
+  "4": {
+    "class_type": "IDReference",
+    "inputs": {
+      "label": "Cup / camera reference",
+      "role": "prop",
+      "notes": "Use this design for the coffee cup.",
+      "image": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "IDReference"
+    }
+  },
+  "5": {
+    "class_type": "LoadVideo",
+    "inputs": {
+      "file": "depth.mp4"
+    },
+    "_meta": {
+      "title": "Optional depth/motion reference (disconnect if unused)"
+    }
+  },
+  "6": {
+    "class_type": "IDReference",
+    "inputs": {
+      "label": "Depth reference",
+      "role": "depth",
+      "notes": "Structural guidance only.",
+      "video": [
+        "5",
+        0
+      ],
+      "previous": [
+        "4",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "IDReference"
+    }
+  },
+  "7": {
+    "class_type": "IDDirector",
+    "inputs": {
+      "name": "Canvas caf\u00e9 scene",
+      "direction": "(0-4 seconds) Default camera.\n(5-7 seconds) Inside the cup, match @ref_001.\n(8-11 seconds) Crane slowly toward the character.\n(11-15 seconds) Overhead.\n(16-18 seconds) Right profile.",
+      "constraints": "Keep identity, wardrobe and cup design consistent.",
+      "provider": "codex",
+      "model": "",
+      "fps": 24,
+      "duration": 18.0,
+      "revision": 0,
+      "character": [
+        "1",
+        0
+      ],
+      "performance": [
+        "2",
+        0
+      ],
+      "references": [
+        "6",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "IDDirector"
+    }
+  },
+  "8": {
+    "class_type": "IDTimeline",
+    "inputs": {
+      "project_id": [
+        "7",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "IDTimeline"
+    }
+  }
+}

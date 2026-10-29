@@ -69,7 +69,7 @@
           ]
         },
         {
-          "name": "scene",
+          "name": "other_references",
           "type": "IMAGE",
           "links": [
             5,
@@ -382,7 +382,7 @@
         "Node name for S&R": "TextEncodeQwenImageEditPlus"
       },
       "widgets_values": [
-        "collage, contact sheet, text, watermark, duplicated people"
+        "watermark, illegible text, distorted anatomy, inconsistent identity"
       ]
     },
     {

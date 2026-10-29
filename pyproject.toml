@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-infinite-director"
-version = "0.1.0"
+version = "0.3.0"
 description = "A persistent, audio-locked cinematic scene editor and Qwen/LTX render scheduler for ComfyUI."
 requires-python = ">=3.10"
 license = {file = "LICENSE"}

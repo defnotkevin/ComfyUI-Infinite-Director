@@ -8,7 +8,7 @@ reusable takes—not an assertion that arbitrary unseen motion is reconstructed 
 Suggested demonstration with actual model outputs:
 
 1. Show the original recording with its unmodified speech.
-2. Show the character and scene references, then the generated storyboard.
+2. Show Other References, then the agent-generated bible, character/prop sheets, and camera storyboard.
 3. Play a short edit with a frontal shot, three-quarter view, and a deliberate prop insert.
 4. Change one camera setup in the studio and render that shot only.
 5. Compare two takes, approve one, and export again. Show the unchanged neighboring shots.

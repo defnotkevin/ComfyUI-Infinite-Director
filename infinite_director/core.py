@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 
 SCHEMA = 1
 CAMERAS = {
+    "overhead": "Directly overhead view looking vertically down at the character",
+    "right_profile": "Eye-level right profile of the character",
+    "crane": "The camera cranes upward and moves toward the character",
+    "custom": "Use the explicitly described camera setup",
     "front": "Eye-level medium shot facing the character, locked camera",
     "three_quarter": "Eye-level close three-quarter view of the character, restrained slow push-in",
     "profile": "Eye-level medium close-up from the character's left side, locked camera",
@@ -60,7 +64,7 @@ def validate_project(project):
         if shot["camera"] not in CAMERAS:
             raise ValueError("Unknown camera")
         integer(shot.get("seed", 0), "seed", 0, 2**63 - 1)
-        for key in ("purpose", "action", "state_in", "state_out", "notes"):
+        for key in ("purpose", "action", "state_in", "state_out", "notes", "image_prompt", "video_prompt", "camera_description", "direction_text"):
             if not isinstance(shot.get(key, ""), str) or len(shot.get(key, "")) > 12000:
                 raise ValueError(f"Invalid shot {key}")
     if shots and cursor != total:
@@ -125,11 +129,17 @@ def shot_spec(project, shot):
     desired = min(project["total_frames"], shot["end"] + handles) - render_start
     frames = 1 + 8 * math.ceil((desired - 1) / 8)
     bible = project.get("bible", "")
-    visual = f"{CAMERAS[shot['camera']]}. {bible} {shot['state_in']} {shot['action']}"
+    camera = shot.get("camera_description") or CAMERAS[shot["camera"]]
+    visual = f"{camera}. {bible} {shot['state_in']} {shot['action']} {shot.get('direction_text', '')}"
     reference_prompt = f"Create one cinematic still, not a collage. Preserve the supplied character's identity and wardrobe. {visual}"
     video_prompt = (f"{visual} By the end of the shot: {shot['state_out']} "
                     "The original recorded speech continues naturally with synchronized mouth movement when the face is visible. "
                     "One continuous camera setup; no internal cuts. " + shot.get("notes", ""))
+    reference_prompt = shot.get("image_prompt") or reference_prompt
+    video_prompt = shot.get("video_prompt") or video_prompt
+    # The canonical continuity record remains effective after manual bible edits.
+    reference_prompt += f"\nContinuity constraints: {bible}"
+    video_prompt += f"\nContinuity constraints: {bible}"
     return {"shot_id": shot["id"], "prompt": video_prompt, "reference_prompt": reference_prompt,
             "dialogue": dialogue(project, shot), "render_start": render_start, "num_frames": frames,
             "trim_start": shot["start"] - render_start, "edit_frames": shot["end"] - shot["start"],
@@ -137,17 +147,20 @@ def shot_spec(project, shot):
 
 
 def reference_key(project, shot):
+    from .direction import bound_references, current_designs
     return digest({"prompt": shot_spec(project, shot)["reference_prompt"],
                    "character": project.get("assets", {}).get("character"),
                    "source": project.get("assets", {}).get("source"),
                    "scene": project.get("assets", {}).get("scene"),
-                   "template": project.get("templates", {}).get("reference"), "seed": shot["seed"]})
+                   "references": bound_references(project, shot),
+                   "designs": [{"id":d["id"],"key":d["key"]} for d in current_designs(project)],
+                   "canvas": project.get("canvas_reference_signature"), "template": project.get("templates", {}).get("reference"), "seed": shot["seed"]})
 
 
 def render_key(project, shot):
     return digest({"spec": shot_spec(project, shot), "reference": reference_key(project, shot),
                    "override": shot.get("reference_override"), "source": project.get("assets", {}).get("source"),
-                   "template": project.get("templates", {}).get("video")})
+                   "canvas": project.get("canvas_video_signature"), "template": project.get("templates", {}).get("video")})
 
 
 def invalidate(project):
@@ -197,7 +210,8 @@ class Store:
 
     def read(self, pid):
         with self.lock:
-            return json.loads((self.folder(pid) / "project.json").read_text())
+            from .direction import migrate
+            return migrate(json.loads((self.folder(pid) / "project.json").read_text()))
 
     def write(self, project):
         validate_project(project)

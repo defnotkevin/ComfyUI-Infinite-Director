@@ -40,3 +40,56 @@ class APITests(unittest.IsolatedAsyncioTestCase):
         response=await self.client.get(self.base+'/manifest');p=await response.json();self.assertIn('graph',p['templates']['reference'])
 
 if __name__=='__main__':unittest.main()
+
+class ReferenceAPITests(APITests):
+    async def test_other_images_and_metadata_and_bundled_route(self):
+        import io
+        from PIL import Image
+        from aiohttp import FormData
+        image=io.BytesIO();Image.new('RGB',(20,20),'red').save(image,format='PNG')
+        for name in ('cup.png','wardrobe.png'):
+            form=FormData();form.add_field('file',image.getvalue(),filename=name,content_type='image/png')
+            response=await self.client.post(self.base+'/assets/other',data=form)
+            self.assertEqual(response.status,200,await response.text())
+        p=self.store.read(self.p['id']);self.assertEqual(len(p['other_references']),2)
+        ref=p['other_references'][0]
+        response=await self.client.patch(self.base+'/references/'+ref['id'],json={'role':'prop','notes':'White ceramic cup'})
+        self.assertEqual(response.status,200)
+        response=await self.client.post(self.base+'/templates/bundled',json={})
+        self.assertEqual(response.status,200,await response.text())
+        self.assertEqual(set(self.store.read(p['id'])['templates']),{'reference','video'})
+    async def test_silent_reference_video(self):
+        from aiohttp import FormData
+        from infinite_director.media import run
+        path=Path(self.tmp.name)/'depth.mp4'
+        run(['ffmpeg','-v','error','-y','-f','lavfi','-i','color=c=gray:s=64x64:r=24:d=1','-c:v','libx264',path])
+        form=FormData();form.add_field('file',path.read_bytes(),filename='depth.mp4',content_type='video/mp4')
+        response=await self.client.post(self.base+'/assets/other?role=depth',data=form)
+        self.assertEqual(response.status,200,await response.text())
+        ref=self.store.read(self.p['id'])['other_references'][0]
+        self.assertEqual(ref['media_type'],'video');self.assertEqual(ref['role'],'depth')
+        self.assertTrue(self.store.asset(self.p['id'],ref['poster']).exists())
+    async def test_develop_endpoint_commits_plan_and_generates_auditable_outputs(self):
+        import asyncio
+        from unittest.mock import patch
+        self.store.update(self.p['id'],lambda p:p.update(total_frames=48,direction='(0-2 seconds) Front camera',assets={'source':{'poster':'source.png','file':'source.mp4','duration':2}}))
+        response=await self.client.post(self.base+'/templates/bundled',json={});self.assertEqual(response.status,200)
+        def fake(model,system,prompt,images=None):
+            data=json.loads(prompt)
+            if 'continuity supervisor' in system:return {'bible':'Character in blue shirt.', 'designs':[{'kind':'character','label':'Character','prompt':'Three-view character sheet','reference_ids':[]}], 'assumptions':[]}
+            return {'shots':[{'id':s['id'],'camera':'front','image_prompt':'Single front frame','video_prompt':'Natural delivery','reference_ids':[]} for s in data['shots']]}
+        with patch('infinite_director.intelligence.ollama',side_effect=fake):
+            response=await self.client.post(self.base+'/intelligence',json={'action':'develop','model':'fixture','generate':True})
+            self.assertEqual(response.status,200,await response.text())
+            for _ in range(200):
+                if not self.engine.busy(self.p['id']):break
+                await asyncio.sleep(.01)
+        p=self.store.read(self.p['id']);self.assertEqual(p['jobs'][-1]['status'],'complete',p['jobs'][-1])
+        self.assertTrue(self.store.asset(p['id'],p['designs'][0]['file']).is_file())
+        self.assertTrue(self.store.asset(p['id'],p['shots'][0]['reference']).is_file())
+        response=await self.client.get(self.base);visible=await response.json()
+        self.assertFalse(visible['designs'][0]['stale']);self.assertIn('compiled',visible['shots'][0])
+        response=await self.client.patch(self.base+'/designs/'+p['designs'][0]['id'],json={'prompt':'Updated blue shirt design'})
+        self.assertEqual(response.status,200)
+        response=await self.client.get(self.base);visible=await response.json()
+        self.assertTrue(visible['designs'][0]['stale']);self.assertNotIn('reference',visible['shots'][0])

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .core import CAMERAS, identifier, invalidate, plan, render_key, validate_project, validate_transcript
 from .engine import validate_template
+from .direction import ROLES, plan_direction, reference_catalog
 from .runtime import runtime
 
 
@@ -55,7 +56,7 @@ def register_routes():
 
     @route("get", "/health")
     async def health(request):
-        return web.json_response({"version": "0.1.0", "ffmpeg": bool(shutil.which("ffmpeg")),
+        return web.json_response({"version": "0.2.0", "ffmpeg": bool(shutil.which("ffmpeg")),
                                   "ffprobe": bool(shutil.which("ffprobe")), "cameras": CAMERAS})
 
     @route("get", "/projects")
@@ -71,9 +72,15 @@ def register_routes():
     async def get_project(request):
         store, engine = runtime()
         p = store.read(request.match_info["pid"])
+        from .direction import design_key
+        for design in p.get("designs", []):
+            design["stale"] = design.get("key") != design_key(p, design)
         # Large templates stay server-side; the editor needs status and model names only.
         p["templates"] = {role: {"hash": t["hash"], "output_node": t["output_node"],
             "nodes": len(t["graph"])} for role, t in p["templates"].items()}
+        from .core import shot_spec
+        for shot in p["shots"]:
+            shot["compiled"] = shot_spec(p, shot)
         p["busy"] = engine.busy(p["id"])
         return web.json_response(p)
 
@@ -97,7 +104,7 @@ def register_routes():
         store, engine = runtime()
         engine.idle(pid)
         initial = store.read(pid)
-        if kind not in ("source", "character", "scene", "reference"):
+        if kind not in ("source", "character", "scene", "reference", "other"):
             raise ValueError("Invalid asset type")
         sid = request.query.get("shot_id")
         if kind == "reference" and sid not in {s["id"] for s in initial["shots"]}:
@@ -116,7 +123,7 @@ def register_routes():
             with path.open("wb") as handle:
                 while chunk := await part.read_chunk(1024 * 1024):
                     size += len(chunk)
-                    if size > (2 * 1024**3 if kind == "source" else 32 * 1024**2):
+                    if size > (2 * 1024**3 if kind in ("source", "other") else 32 * 1024**2):
                         raise ValueError("Upload exceeds size limit")
                     checksum.update(chunk)
                     handle.write(chunk)
@@ -127,6 +134,26 @@ def register_routes():
                 path.rename(folder / source_name)
                 asset = {"file": f"{relative}/{source_name}", "audio": f"{relative}/master.wav",
                          "poster": f"{relative}/source.png", "hash": checksum.hexdigest(), "duration": meta["duration"]}
+            elif kind == "other":
+                from .media import probe, extract_frame
+                role = request.query.get("role", "general")
+                if role not in ROLES: raise ValueError("Unknown reference role")
+                try:
+                    with Image.open(path) as im:
+                        if im.width * im.height > 40_000_000: raise ValueError("Image exceeds 40 megapixels")
+                        ImageOps.exif_transpose(im).convert("RGB").save(folder / "image.png")
+                    path.unlink()
+                    asset = {"file": f"{relative}/image.png", "media_type": "image"}
+                except (Image.UnidentifiedImageError, OSError):
+                    meta = await asyncio.to_thread(probe, path)
+                    if not meta["video"] or meta["duration"] > 3600: raise ValueError("Expected an image or a video shorter than one hour")
+                    extension = Path(part.filename or "").suffix.lower()
+                    if extension not in (".mp4", ".mov", ".mkv", ".webm"): extension = ".mp4"
+                    path.rename(folder / ("reference" + extension))
+                    await asyncio.to_thread(extract_frame, folder / ("reference" + extension), folder / "poster.jpg", 0)
+                    asset = {"file": f"{relative}/reference{extension}", "poster": f"{relative}/poster.jpg", "media_type": "video", "duration": meta["duration"]}
+                asset.update(id="ref_"+token[:8], label=Path(part.filename or "Reference").name[:120],
+                             role=role, notes="", hash=checksum.hexdigest())
             else:
                 with Image.open(path) as im:
                     if im.width * im.height > 40_000_000:
@@ -135,13 +162,15 @@ def register_routes():
                 path.unlink()
                 asset = {"file": f"{relative}/image.png", "hash": checksum.hexdigest()}
             def change(p):
-                if kind == "reference":
+                if kind == "other":
+                    p["other_references"].append(asset)
+                elif kind == "reference":
                     shot = next(s for s in p["shots"] if s["id"] == sid)
                     shot.update(reference_override=asset, reference=asset["file"])
                 else:
                     p["assets"][kind] = asset
                 if kind == "source":
-                    p.update(total_frames=max(1, math.ceil(asset["duration"] * p["fps"])), shots=[], transcript=[], observations=[])
+                    p.update(total_frames=max(1, math.ceil(asset["duration"] * p["fps"])), shots=[], transcript=[], observations=[], designs=[])
                 invalidate(p)
             result = edit(pid, change, initial["revision"])
             return web.json_response(result)
@@ -182,26 +211,45 @@ def register_routes():
             # Keep previous edits recoverable without making them active.
             if p["shots"]:
                 p.setdefault("plan_history", []).append(copy.deepcopy(p["shots"]))
-            plan(p, data.get("target_seconds", 6))
+            plan_direction(p, data.get("target_seconds", 6))
             p.pop("export", None)
         return web.json_response(edit(request.match_info["pid"], change, data.get("revision")))
 
     @route("post", "/projects/{pid}/intelligence")
     async def intelligence(request):
-        from .intelligence import enrich, transcribe, observe, review_take
+        from .intelligence import enrich, transcribe, observe, review_take, develop_scene
         pid, data = request.match_info["pid"], await body(request)
         store, engine = runtime()
         action = data.get("action")
-        if action not in ("direct", "transcribe", "observe", "review"):
+        if action not in ("direct", "transcribe", "observe", "review", "develop"):
             raise ValueError("Unknown intelligence action")
         snapshot = store.read(pid)
         if "source" not in snapshot["assets"]:
             raise ValueError("Upload a performance first")
         if action == "direct" and not snapshot["shots"]:
             raise ValueError("Plan shots before directing")
+        if action == "develop" and data.get("generate", True) and not snapshot["templates"].get("reference"):
+            raise ValueError("Use bundled renderers or capture a Qwen renderer before generating preproduction assets")
         def work(cancel, jid):
+            if action == "develop":
+                result = develop_scene(store, snapshot, data.get("model", "qwen3.6:27b-q8_0"), cancel,
+                                       lambda **kw: engine.progress(pid, jid, **kw))
+                if result is None or cancel.is_set(): return
+                def save(p):
+                    for key in ("shots", "bible", "designs", "plan_notes", "planner", "plan_history", "agent_report", "reference_observations"):
+                        if key in result: p[key] = result[key]
+                    invalidate(p)
+                store.update(pid, save)
+                if data.get("generate", True):
+                    info = engine.client.request("/object_info")
+                    template = result["templates"]["reference"]
+                    validate_template(template["graph"], "reference", template["output_node"], info)
+                    engine.generate_designs(result, cancel, jid)
+                    engine.generate_references(result, result["shots"], cancel, jid)
+                engine.progress(pid, jid, phase="audit", message="Review the scene bible, design sheets, prompts and camera images before video generation")
+                return
             if action == "direct":
-                result = enrich(snapshot, data.get("model", ""))
+                result = enrich(snapshot, data.get("model", "qwen3.6:27b-q8_0"))
                 def change(p):
                     p.update(shots=result["shots"], planner=result["planner"])
                     invalidate(p)
@@ -212,12 +260,12 @@ def register_routes():
                     p["transcript"] = result
                     invalidate(p)
             elif action == "review":
-                take_id, result = review_take(store, snapshot, data.get("shot_id", ""), data.get("model", ""))
+                take_id, result = review_take(store, snapshot, data.get("shot_id", ""), data.get("model", "qwen3.6:27b-q8_0"))
                 def change(p):
                     shot = next(s for s in p["shots"] if s["id"] == data["shot_id"])
                     next(c for c in shot["candidates"] if c["id"] == take_id)["visual_review"] = result
             else:
-                result = observe(store, snapshot, data.get("model", ""))
+                result = observe(store, snapshot, data.get("model", "qwen3.6:27b-q8_0"))
                 def change(p):
                     p["observations"] = result
             if not cancel.is_set():
@@ -229,12 +277,21 @@ def register_routes():
         data = await body(request)
         def change(p):
             shot = next(s for s in p["shots"] if s["id"] == request.match_info["sid"])
-            for key in ("camera", "purpose", "action", "state_in", "state_out", "notes", "seed"):
+            changed = {k for k in ("camera", "camera_description", "action", "state_in", "state_out", "notes") if k in data and data[k] != shot.get(k, "")}
+            if "camera" in changed and data.get("camera_description", shot.get("camera_description")) == shot.get("camera_description"):
+                data["camera_description"] = ""
+            for prompt in ("image_prompt", "video_prompt"):
+                relevant = changed - ({"notes", "state_out"} if prompt == "image_prompt" else set())
+                if relevant and data.get(prompt, shot.get(prompt)) == shot.get(prompt):
+                    data[prompt] = ""
+            for key in ("camera", "purpose", "action", "state_in", "state_out", "notes", "seed", "image_prompt", "video_prompt", "camera_description", "reference_ids"):
                 if key in data:
                     shot[key] = data[key]
             if data.get("clear_reference"):
                 shot.pop("reference_override", None)
                 shot.pop("reference", None)
+            from .direction import bound_references
+            bound_references(p, shot)
             validate_project(p)
             invalidate(p)
         return web.json_response(edit(request.match_info["pid"], change, data.get("revision")))
@@ -265,6 +322,59 @@ def register_routes():
             p.pop("export", None)
         return web.json_response(edit(request.match_info["pid"], change, data.get("revision")))
 
+    @route("patch", "/projects/{pid}/references/{rid}")
+    async def update_reference(request):
+        data = await body(request)
+        def change(p):
+            ref = next(r for r in p["other_references"] if r["id"] == request.match_info["rid"])
+            for key in ("label", "notes", "role"):
+                if key in data:
+                    if not isinstance(data[key], str) or len(data[key]) > 4000: raise ValueError("Invalid reference metadata")
+                    if key == "role" and data[key] not in ROLES: raise ValueError("Invalid reference role")
+                    ref[key] = data[key]
+            invalidate(p)
+        return web.json_response(edit(request.match_info["pid"], change, data.get("revision")))
+
+    @route("patch", "/projects/{pid}/designs/{did}")
+    async def update_design(request):
+        data = await body(request)
+        def change(p):
+            design = next(d for d in p["designs"] if d["id"] == request.match_info["did"])
+            prompt = data.get("prompt", design["prompt"])
+            if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 12000:
+                raise ValueError("Invalid design prompt")
+            design["prompt"] = prompt
+            invalidate(p)
+        return web.json_response(edit(request.match_info["pid"], change, data.get("revision")))
+
+    @route("delete", "/projects/{pid}/references/{rid}")
+    async def delete_reference(request):
+        data = await body(request)
+        rid = request.match_info["rid"]
+        def change(p):
+            if rid not in {r["id"] for r in p["other_references"]}: raise ValueError("Unknown reference")
+            p["other_references"] = [r for r in p["other_references"] if r["id"] != rid]
+            if rid == "ref_legacy_scene": p["assets"].pop("scene", None)
+            for item in p["shots"] + p["designs"]:
+                item["reference_ids"] = [r for r in item.get("reference_ids", []) if r != rid]
+            invalidate(p)
+        return web.json_response(edit(request.match_info["pid"], change, data.get("revision")))
+
+    @route("post", "/projects/{pid}/templates/bundled")
+    async def bundled_templates(request):
+        data = await body(request)
+        store, engine = runtime()
+        info = await asyncio.to_thread(engine.client.request, "/object_info")
+        root = Path(__file__).resolve().parent.parent / "workflows"
+        templates = {}
+        for role, filename in (("reference", "02-qwen-reference.api.json"), ("video", "03-ltx25-audio-video.api.json")):
+            graph = json.loads((root / filename).read_text())
+            templates[role] = validate_template(graph, role, info=info)
+        def change(p):
+            p["templates"].update(templates)
+            invalidate(p)
+        return web.json_response(edit(request.match_info["pid"], change, data.get("revision")))
+
     @route("post", "/projects/{pid}/templates/{role}")
     async def template(request):
         data = await body(request)
@@ -280,7 +390,7 @@ def register_routes():
     @route("post", "/projects/{pid}/render")
     async def render(request):
         data = await body(request)
-        jid = await asyncio.to_thread(runtime()[1].render, request.match_info["pid"], data.get("shot_ids"), data.get("retries", 1), bool(data.get("force", False)))
+        jid = await asyncio.to_thread(runtime()[1].render, request.match_info["pid"], data.get("shot_ids"), data.get("retries", 1), bool(data.get("force", False)), data.get("stage", "video"))
         return web.json_response({"job_id": jid})
 
     @route("post", "/projects/{pid}/cancel")

@@ -1,0 +1,569 @@
+{
+  "last_node_id": 8,
+  "last_link_id": 7,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        0
+      ],
+      "size": [
+        325,
+        120
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "image"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            4
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "character.png",
+        "image"
+      ],
+      "title": "Identity reference"
+    },
+    {
+      "id": 2,
+      "type": "LoadVideo",
+      "pos": [
+        0,
+        300
+      ],
+      "size": [
+        325,
+        120
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "file",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "file"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            5
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "performance.mp4"
+      ],
+      "title": "Original talking performance"
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        600
+      ],
+      "size": [
+        325,
+        120
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "image"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "cup.png",
+        "image"
+      ],
+      "title": "Prop or camera reference"
+    },
+    {
+      "id": 4,
+      "type": "IDReference",
+      "pos": [
+        400,
+        600
+      ],
+      "size": [
+        325,
+        190
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "label",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "label"
+          }
+        },
+        {
+          "name": "role",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "role"
+          }
+        },
+        {
+          "name": "notes",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "notes"
+          }
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "ID_REFERENCES",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "reference_id",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "IDReference"
+      },
+      "widgets_values": [
+        "Cup / camera reference",
+        "prop",
+        "Use this design for the coffee cup."
+      ]
+    },
+    {
+      "id": 5,
+      "type": "LoadVideo",
+      "pos": [
+        0,
+        950
+      ],
+      "size": [
+        325,
+        120
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "file",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "file"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "depth.mp4"
+      ],
+      "title": "Optional depth/motion reference (disconnect if unused)"
+    },
+    {
+      "id": 6,
+      "type": "IDReference",
+      "pos": [
+        400,
+        950
+      ],
+      "size": [
+        325,
+        220
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "label",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "label"
+          }
+        },
+        {
+          "name": "role",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "role"
+          }
+        },
+        {
+          "name": "notes",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "notes"
+          }
+        },
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 2
+        },
+        {
+          "name": "previous",
+          "type": "ID_REFERENCES",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "references",
+          "type": "ID_REFERENCES",
+          "links": [
+            6
+          ]
+        },
+        {
+          "name": "reference_id",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "IDReference"
+      },
+      "widgets_values": [
+        "Depth reference",
+        "depth",
+        "Structural guidance only."
+      ]
+    },
+    {
+      "id": 7,
+      "type": "IDDirector",
+      "pos": [
+        850,
+        180
+      ],
+      "size": [
+        325,
+        400
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "name",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "name"
+          }
+        },
+        {
+          "name": "direction",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "direction"
+          }
+        },
+        {
+          "name": "constraints",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "constraints"
+          }
+        },
+        {
+          "name": "provider",
+          "type": "COMBO",
+          "link": null,
+          "widget": {
+            "name": "provider"
+          }
+        },
+        {
+          "name": "model",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "model"
+          }
+        },
+        {
+          "name": "fps",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "fps"
+          }
+        },
+        {
+          "name": "duration",
+          "type": "FLOAT",
+          "link": null,
+          "widget": {
+            "name": "duration"
+          }
+        },
+        {
+          "name": "revision",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "revision"
+          }
+        },
+        {
+          "name": "character",
+          "type": "IMAGE",
+          "link": 4
+        },
+        {
+          "name": "performance",
+          "type": "VIDEO",
+          "link": 5
+        },
+        {
+          "name": "references",
+          "type": "ID_REFERENCES",
+          "link": 6
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plan",
+          "type": "ID_PLAN",
+          "links": []
+        },
+        {
+          "name": "project_id",
+          "type": "STRING",
+          "links": [
+            7
+          ]
+        },
+        {
+          "name": "scene_bible",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "qwen_design_prompts",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "shot_segments",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "plan_json",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "IDDirector"
+      },
+      "widgets_values": [
+        "Canvas caf\u00e9 scene",
+        "(0-4 seconds) Default camera.\n(5-7 seconds) Inside the cup, match @ref_001.\n(8-11 seconds) Crane slowly toward the character.\n(11-15 seconds) Overhead.\n(16-18 seconds) Right profile.",
+        "Keep identity, wardrobe and cup design consistent.",
+        "codex",
+        "",
+        24,
+        18.0,
+        0
+      ]
+    },
+    {
+      "id": 8,
+      "type": "IDTimeline",
+      "pos": [
+        1300,
+        180
+      ],
+      "size": [
+        325,
+        120
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "project_id",
+          "type": "STRING",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "timeline_json",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "IDTimeline"
+      },
+      "widgets_values": []
+    }
+  ],
+  "links": [
+    [
+      1,
+      3,
+      0,
+      4,
+      3,
+      "IMAGE"
+    ],
+    [
+      2,
+      5,
+      0,
+      6,
+      3,
+      "VIDEO"
+    ],
+    [
+      3,
+      4,
+      0,
+      6,
+      4,
+      "ID_REFERENCES"
+    ],
+    [
+      4,
+      1,
+      0,
+      7,
+      8,
+      "IMAGE"
+    ],
+    [
+      5,
+      2,
+      0,
+      7,
+      9,
+      "VIDEO"
+    ],
+    [
+      6,
+      6,
+      0,
+      7,
+      10,
+      "ID_REFERENCES"
+    ],
+    [
+      7,
+      7,
+      1,
+      8,
+      0,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.65,
+      "offset": [
+        50,
+        50
+      ]
+    }
+  },
+  "version": 0.4
+}

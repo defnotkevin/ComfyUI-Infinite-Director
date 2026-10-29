@@ -1,4 +1,7 @@
 from .nodes import NODE_CLASS_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS
+from .canvas_nodes import NODE_CLASS_MAPPINGS as CANVAS_NODES, NODE_DISPLAY_NAME_MAPPINGS as CANVAS_NAMES
+NODE_CLASS_MAPPINGS.update(CANVAS_NODES)
+NODE_DISPLAY_NAME_MAPPINGS.update(CANVAS_NAMES)
 from .infinite_director.api import register_routes
 
 WEB_DIRECTORY = "./web"
